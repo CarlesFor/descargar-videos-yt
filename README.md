@@ -54,6 +54,7 @@ python app.py
 ```
 
 Pega la URL, elige `Video + audio` o `Solo audio MP3`, selecciona una carpeta si no quieres usar `downloads/`, y pulsa `Descargar`.
+Usa `Actualizar yt-dlp` para instalar la ultima version de `yt-dlp` desde la propia app.
 
 El modo `Video + audio` intenta descargar MP4 con video H.264 y audio M4A/AAC cuando YouTube lo ofrece. Algunos archivos pueden no abrirse en el reproductor de Windows, aunque editores como CapCut si los acepten.
 

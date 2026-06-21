@@ -27,6 +27,7 @@ class YoutubeDownloaderApp:
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.current_process: subprocess.Popen[str] | None = None
         self.download_thread: threading.Thread | None = None
+        self.update_thread: threading.Thread | None = None
 
         self._build_ui()
         self._poll_log_queue()
@@ -76,15 +77,18 @@ class YoutubeDownloaderApp:
 
         buttons = ttk.Frame(main)
         buttons.grid(row=4, column=0, sticky="ew", pady=(0, 12))
-        buttons.columnconfigure(2, weight=1)
+        buttons.columnconfigure(3, weight=1)
 
         self.download_button = ttk.Button(buttons, text="Descargar", command=self._start_download)
         self.download_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self.cancel_button = ttk.Button(buttons, text="Cancelar", command=self._cancel_download, state="disabled")
-        self.cancel_button.grid(row=0, column=1, sticky="w")
+        self.cancel_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
 
-        ttk.Label(buttons, textvariable=self.status_var).grid(row=0, column=2, sticky="e")
+        self.update_button = ttk.Button(buttons, text="Actualizar yt-dlp", command=self._start_update)
+        self.update_button.grid(row=0, column=2, sticky="w")
+
+        ttk.Label(buttons, textvariable=self.status_var).grid(row=0, column=3, sticky="e")
 
         log_frame = ttk.Frame(main)
         log_frame.grid(row=5, column=0, sticky="nsew")
@@ -100,6 +104,10 @@ class YoutubeDownloaderApp:
             self.output_dir_var.set(selected)
 
     def _start_download(self) -> None:
+        if self._is_process_running():
+            messagebox.showinfo("Proceso en curso", "Espera a que termine el proceso actual.")
+            return
+
         url = self.url_var.get().strip()
         if not url:
             messagebox.showwarning("Falta la URL", "Pega la URL del video antes de descargar.")
@@ -115,6 +123,19 @@ class YoutubeDownloaderApp:
         command = self._build_command(url, output_dir)
         self.download_thread = threading.Thread(target=self._run_download, args=(command, output_dir), daemon=True)
         self.download_thread.start()
+
+    def _start_update(self) -> None:
+        if self._is_process_running():
+            messagebox.showinfo("Proceso en curso", "Espera a que termine el proceso actual.")
+            return
+
+        self._set_busy(True, "Actualizando", can_cancel=False)
+        self.log_text.clear()
+        self._log("Actualizando yt-dlp a la ultima version...")
+
+        command = [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"]
+        self.update_thread = threading.Thread(target=self._run_update, args=(command,), daemon=True)
+        self.update_thread.start()
 
     def _build_command(self, url: str, output_dir: Path) -> list[str]:
         output_template = str(output_dir / "%(title).200B.%(ext)s")
@@ -182,7 +203,40 @@ class YoutubeDownloaderApp:
             self.root.after(0, self.status_var.set, "Error")
         finally:
             self.current_process = None
-            self.root.after(0, self._set_running, False)
+            self.root.after(0, self._set_busy, False, None, False)
+
+    def _run_update(self, command: list[str]) -> None:
+        try:
+            self.current_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+
+            assert self.current_process.stdout is not None
+            for line in self.current_process.stdout:
+                self._log(line.rstrip())
+
+            exit_code = self.current_process.wait()
+            if exit_code == 0:
+                self._log("yt-dlp se actualizo correctamente.")
+                self.root.after(0, self.status_var.set, "Actualizado")
+            else:
+                self._log(f"La actualizacion termino con codigo {exit_code}.")
+                self.root.after(0, self.status_var.set, "Error")
+        except FileNotFoundError:
+            self._log("No se encontro Python o pip para actualizar yt-dlp.")
+            self.root.after(0, self.status_var.set, "Error")
+        except Exception as exc:
+            self._log(f"Error: {exc}")
+            self.root.after(0, self.status_var.set, "Error")
+        finally:
+            self.current_process = None
+            self.root.after(0, self._set_busy, False, None, False)
 
     def _cancel_download(self) -> None:
         if self.current_process and self.current_process.poll() is None:
@@ -194,10 +248,17 @@ class YoutubeDownloaderApp:
         subprocess.Popen(["explorer", str(output_dir)])
 
     def _set_running(self, running: bool) -> None:
-        self.download_button.configure(state="disabled" if running else "normal")
-        self.cancel_button.configure(state="normal" if running else "disabled")
-        if running:
-            self.status_var.set("Descargando")
+        self._set_busy(running, "Descargando" if running else None, can_cancel=running)
+
+    def _set_busy(self, busy: bool, status: str | None, can_cancel: bool) -> None:
+        self.download_button.configure(state="disabled" if busy else "normal")
+        self.update_button.configure(state="disabled" if busy else "normal")
+        self.cancel_button.configure(state="normal" if can_cancel else "disabled")
+        if status is not None:
+            self.status_var.set(status)
+
+    def _is_process_running(self) -> bool:
+        return self.current_process is not None and self.current_process.poll() is None
 
     def _log(self, message: str) -> None:
         self.log_queue.put(message)
